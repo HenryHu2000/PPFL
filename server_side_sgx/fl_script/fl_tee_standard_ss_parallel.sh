@@ -2,9 +2,9 @@
 set -e
 . /opt/openenclave/share/openenclave/openenclaverc
 
-IP_CLIENT_1=127.0.0.1
-PORT_CLIENT_1=7777
-PASSWORD_CLIENT_1=root
+IP_CLIENT_LIST=("127.0.0.1" "127.0.0.1")
+PORT_CLIENT_LIST=(7777 8888)
+PASSWORD_CLIENT_LIST=("root" "root")
 
 NUM_ROUNDS=2
 NUM_CLIENTS=2
@@ -37,8 +37,12 @@ mkdir ${SERVER_AVERAGED_DIR}
 
 cp ${STARTER_REE} "${SERVER_AVERAGED_DIR}${DM}_averaged_r0.weights_ree"
 cp ${STARTER_TEE} "${SERVER_AVERAGED_DIR}${DM}_averaged_r0.weights_tee"
-
-ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "[${IP_CLIENT_1}]:${PORT_CLIENT_1}"
+for ((c=1;c<=NUM_CLIENTS;c++))
+do
+	cp=$((c-1))
+	ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "[${IP_CLIENT_LIST[${cp}]}]:${PORT_CLIENT_LIST[${cp}]}"
+	sshpass -p ${PASSWORD_CLIENT_LIST[${cp}]} scp -o StrictHostKeyChecking=accept-new -P ${PORT_CLIENT_LIST[${cp}]} "cfg/${DM}.cfg" "root@${IP_CLIENT_LIST[${cp}]}:cfg/${DM}.cfg"
+done
 
 for ((r=1;r<=NUM_ROUNDS;r++))
 do
@@ -47,31 +51,45 @@ do
 	do
 		echo "============= copy weights server -> client ${c} ============="
 		rp=$((r-1))
-		time sshpass -p ${PASSWORD_CLIENT_1} scp -o StrictHostKeyChecking=accept-new -P ${PORT_CLIENT_1} "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights_ree" "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}_global.weights_ree"
+		cp=$((c-1))
+		time sshpass -p ${PASSWORD_CLIENT_LIST[${cp}]} scp -P ${PORT_CLIENT_LIST[${cp}]} "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights_ree" "root@${IP_CLIENT_LIST[${cp}]}:${CLIENT_MODEL_DIR}${DM}_global.weights_ree"
 		filesize=$(stat --format=%s "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights_ree")
 		echo "ree weights: ${filesize} Bytes"
 		sleep 3s
 		
-		time sshpass -p ${PASSWORD_CLIENT_1} scp -P ${PORT_CLIENT_1} "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights_tee" "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}_global.weights_tee"
+		time sshpass -p ${PASSWORD_CLIENT_LIST[${cp}]} scp -P ${PORT_CLIENT_LIST[${cp}]} "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights_tee" "root@${IP_CLIENT_LIST[${cp}]}:${CLIENT_MODEL_DIR}${DM}_global.weights_tee"
 		filesize=$(stat --format=%s "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights_tee")
 		echo "tee weights: ${filesize} Bytes"
 		sleep 3s
-
-		echo "============= ssh to the client and local training ============="
-
+	done
+	# run processes and store pids in array
+	for ((c=1;c<=NUM_CLIENTS;c++))
+	do
+		echo "============= ssh to the client ${c} and local training ============="
+		cp=$((c-1))
 		# training with TEEs (for ss, only support tee)
-		time sshpass -p ${PASSWORD_CLIENT_1} ssh -o StrictHostKeyChecking=accept-new -p ${PORT_CLIENT_1} "root@${IP_CLIENT_1}" darknetp classifier train -pp_start ${PP_START} -pp_end ${PP_END} -ss 1 "cfg/${DATASET}.dataset" "cfg/${DM}.cfg" "${CLIENT_MODEL_DIR}${DM}_global.weights"
+		time sshpass -p ${PASSWORD_CLIENT_LIST[${cp}]} ssh -o StrictHostKeyChecking=accept-new -p ${PORT_CLIENT_LIST[${cp}]} "root@${IP_CLIENT_LIST[${cp}]}" \
+			darknetp classifier train -pp_start ${PP_START} -pp_end ${PP_END} -ss 1 "cfg/${DATASET}.dataset" "cfg/${DM}.cfg" "${CLIENT_MODEL_DIR}${DM}_global.weights" \
+			1> >(sed "s/^/[c${c}] /") 2> >(sed "s/^/[c${c}] /" >&2) &
+		pids[${cp}]=$!
 		sleep 3s
-
+	done
+	# wait for all pids
+	for pid in ${pids[*]}; do
+		wait $pid
+	done
+	for ((c=1;c<=NUM_CLIENTS;c++))
+	do
 		echo "============= copy weights client ${c} -> server ============="
+		cp=$((c-1))
 		rm -rf "${SERVER_UPDATES_DIR}${DM}_c${c}.weights"
 		mkdir "${SERVER_UPDATES_DIR}${DM}_c${c}.weights"
-		time sshpass -p ${PASSWORD_CLIENT_1} scp -P ${PORT_CLIENT_1} "root@${IP_CLIENT_1}:${CLIENT_BACKUP_DIR}${DM}.weights_ree" "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_ree"
+		time sshpass -p ${PASSWORD_CLIENT_LIST[${cp}]} scp -P ${PORT_CLIENT_LIST[${cp}]} "root@${IP_CLIENT_LIST[${cp}]}:${CLIENT_BACKUP_DIR}${DM}.weights_ree" "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_ree"
 		filesize=$(stat --format=%s "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_ree")
 		echo "ree weights: ${filesize} Bytes"
 		sleep 3s
 		
-		time sshpass -p ${PASSWORD_CLIENT_1} scp -P ${PORT_CLIENT_1} "root@${IP_CLIENT_1}:${CLIENT_BACKUP_DIR}${DM}.weights_tee" "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_tee"
+		time sshpass -p ${PASSWORD_CLIENT_LIST[${cp}]} scp -P ${PORT_CLIENT_LIST[${cp}]} "root@${IP_CLIENT_LIST[${cp}]}:${CLIENT_BACKUP_DIR}${DM}.weights_tee" "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_tee"
 		filesize=$(stat --format=%s "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_tee")
 		echo "tee weights: ${filesize} Bytes"
 		sleep 3s

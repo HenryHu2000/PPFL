@@ -30,12 +30,14 @@ void os_secure_aggregation(
     size_t num_p,
     float* input_buf,
     float* output_buf,
+    float* aux_buf,
     size_t buf_size)
 {
    // add input_buf to aggregated buf
    for(size_t i=0; i<buf_size; i++)
    {
        output_buf[i] += input_buf[i];
+       aux_buf[i] += input_buf[i] * input_buf[i];
    }
 
    // the last one then averaging
@@ -43,6 +45,7 @@ void os_secure_aggregation(
    {
        for(size_t i=0; i<buf_size; i++){
            output_buf[i] = output_buf[i] / num_p;
+           aux_buf[i] = aux_buf[i] / num_p;
        }
    }
 }
@@ -52,6 +55,9 @@ void fed_averaging_ree(int pp1, int pp2, network **nets, size_t num_p)
 {
     size_t size_bias;
     size_t size_weight;
+
+    size_t* total_counters = calloc(num_p, sizeof(size_t));
+    size_t* outlier_counters = calloc(num_p, sizeof(size_t));
 
     for(int i = 0; i < nets[0]->n; ++i){
 
@@ -71,10 +77,24 @@ void fed_averaging_ree(int pp1, int pp2, network **nets, size_t num_p)
             }
 
             printf("Aggregating layer %d ... in OS:", i);
-
-            for (size_t j=1; j<num_p; j++){
-                os_secure_aggregation(j==num_p-1, num_p, nets[j]->layers[i].biases, l.biases, size_bias);
+            float* aux_buf = calloc(size_bias, sizeof(float));
+            float* avg_buf = calloc(size_bias, sizeof(float));
+            for (size_t j=0; j<num_p; j++){
+                os_secure_aggregation(j==num_p-1, num_p, nets[j]->layers[i].biases, avg_buf, aux_buf, size_bias);
             }
+            for (size_t j=0; j<num_p; j++){
+                for(size_t k=0; k<size_bias; k++){
+                    float sd = sqrt(aux_buf[k] - avg_buf[k] * avg_buf[k] + 1E-5);
+                    float bias = nets[j]->layers[i].biases[k];
+                    total_counters[j]++;
+                    if (bias < avg_buf[k] - sd * 2.0 || bias > avg_buf[k] + sd * 2.0) {
+                        outlier_counters[j]++;
+                    }
+                }
+            }
+            memcpy(l.biases, avg_buf, size_bias * sizeof(float));
+            free(aux_buf);
+            free(avg_buf);
             printf(" biases finished...");
 
             if (debug==1){
@@ -84,9 +104,10 @@ void fed_averaging_ree(int pp1, int pp2, network **nets, size_t num_p)
                     printf("%f, ", l.weights[z]);
                 }
             }
-
-            for (size_t j=1; j<num_p; j++){
-                os_secure_aggregation(j==num_p-1, num_p, nets[j]->layers[i].weights, l.weights, size_weight);
+            aux_buf = calloc(size_weight, sizeof(float));
+            avg_buf = calloc(size_weight, sizeof(float));
+            for (size_t j=0; j<num_p; j++){
+                os_secure_aggregation(j==num_p-1, num_p, nets[j]->layers[i].weights, avg_buf, aux_buf, size_weight);
 
                 if (debug==1){
                     printf("\nnet %zu: ", j);
@@ -96,6 +117,19 @@ void fed_averaging_ree(int pp1, int pp2, network **nets, size_t num_p)
                     }
                 }
             }
+            for (size_t j=0; j<num_p; j++){
+                for(size_t k=0; k<size_weight; k++){
+                    float sd = sqrt(aux_buf[k] - avg_buf[k] * avg_buf[k] + 1E-5);
+                    float weight = nets[j]->layers[i].weights[k];
+                    total_counters[j]++;
+                    if (weight < avg_buf[k] - sd * 2.0 || weight > avg_buf[k] + sd * 2.0) {
+                        outlier_counters[j]++;
+                    }
+                }
+            }
+            memcpy(l.weights, avg_buf, size_weight * sizeof(float));
+            free(aux_buf);
+            free(avg_buf);
 
             if (debug==1){
                 printf("\nnet a: ");
@@ -107,6 +141,14 @@ void fed_averaging_ree(int pp1, int pp2, network **nets, size_t num_p)
             printf(" weights finished\n");
         }
     }
+    fprintf(stderr, "outlier_fractions=[");
+    for (size_t j=0; j<num_p-1; j++){
+        fprintf(stderr, "%lf, ", outlier_counters[j] / (double) total_counters[j]);
+    }
+    fprintf(stderr, "%lf", outlier_counters[num_p-1] / (double) total_counters[num_p-1]);
+    fprintf(stderr, "]\n");
+    free(total_counters);
+    free(outlier_counters);
 }
 
 

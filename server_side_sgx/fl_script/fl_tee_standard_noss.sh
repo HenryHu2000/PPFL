@@ -2,8 +2,9 @@
 set -e
 . /opt/openenclave/share/openenclave/openenclaverc
 
-IP_CLIENT_1=192.168.0.22
-PASSWORD_CLIENT_1=fl-tee-system
+IP_CLIENT_1=127.0.0.1
+PORT_CLIENT_1=7777
+PASSWORD_CLIENT_1=root
 
 NUM_ROUNDS=2
 NUM_CLIENTS=2
@@ -14,10 +15,11 @@ PP_END=8
 DATASET=mnist
 MODEL=lenet
 
-SERVER_APP_DIR="/media/vincent/program/my_oesamples/secure-aggregation-SGX/"
+SERVER_APP_DIR="/home/hh2119/workspace/PPFL/server_side_sgx/"
 SERVER_AVERAGED_DIR="./results/${DATASET}/averaged_standard_noss/"
 SERVER_UPDATES_DIR="./results/${DATASET}/client_updates_standard_noss/"
 CLIENT_MODEL_DIR="/root/models/${DATASET}/"
+CLIENT_BACKUP_DIR="/root/tmp/backup/"
 DM="${DATASET}_${MODEL}"
 
 STARTER="./results/${DATASET}/${DM}_pp${PP_START}${PP_END}.weights"
@@ -41,7 +43,7 @@ do
 	do
 		echo "============= copy weights server -> client ${c} ============="
 		rp=$((r-1))
-		time sshpass -p ${PASSWORD_CLIENT_1} scp "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights" "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}_global.weights"
+		time sshpass -p ${PASSWORD_CLIENT_1} scp -o StrictHostKeyChecking=accept-new -P ${PORT_CLIENT_1} "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights" "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}_global.weights"
 		filesize=$(stat --format=%s "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights")
 		echo "${filesize} Bytes"
 		sleep 3s
@@ -50,15 +52,15 @@ do
 		if [ ${PP_START} == 999 ]
 		then
 			# training without TEEs
-			time sshpass -p ${PASSWORD_CLIENT_1} ssh "root@${IP_CLIENT_1}" darknetp classifier train "cfg/${DATASET}.dataset" "cfg/${DM}.cfg" "${CLIENT_MODEL_DIR}${DM}_global.weights"
+			time sshpass -p ${PASSWORD_CLIENT_1} ssh -o StrictHostKeyChecking=accept-new -p ${PORT_CLIENT_1} "root@${IP_CLIENT_1}" darknetp classifier train "cfg/${DATASET}.dataset" "cfg/${DM}.cfg" "${CLIENT_MODEL_DIR}${DM}_global.weights"
 		else
 			# training with TEEs
-			time sshpass -p ${PASSWORD_CLIENT_1} ssh "root@${IP_CLIENT_1}" darknetp classifier train -pp_start ${PP_START} -pp_end ${PP_END} "cfg/${DATASET}.dataset" "cfg/${DM}.cfg" "${CLIENT_MODEL_DIR}${DM}_global.weights"
+			time sshpass -p ${PASSWORD_CLIENT_1} ssh -p ${PORT_CLIENT_1} "root@${IP_CLIENT_1}" darknetp classifier train -pp_start ${PP_START} -pp_end ${PP_END} "cfg/${DATASET}.dataset" "cfg/${DM}.cfg" "${CLIENT_MODEL_DIR}${DM}_global.weights"
 		fi
 		sleep 3s
 
 		echo "============= copy weights client ${c} -> server ============="
-		time sshpass -p ${PASSWORD_CLIENT_1} scp "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}.weights" "${SERVER_UPDATES_DIR}${DM}_c${c}.weights"
+		time sshpass -p ${PASSWORD_CLIENT_1} scp -P ${PORT_CLIENT_1} "root@${IP_CLIENT_1}:${CLIENT_BACKUP_DIR}${DM}.weights" "${SERVER_UPDATES_DIR}${DM}_c${c}.weights"
 		filesize=$(stat --format=%s "${SERVER_UPDATES_DIR}${DM}_c${c}.weights")
 		echo "${filesize} Bytes"
 		sleep 3s

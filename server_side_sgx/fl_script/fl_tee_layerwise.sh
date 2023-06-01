@@ -2,8 +2,9 @@
 set -e
 . /opt/openenclave/share/openenclave/openenclaverc
 
-IP_CLIENT_1=192.168.0.22
-PASSWORD_CLIENT_1=fl-tee-system
+IP_CLIENT_1=127.0.0.1
+PORT_CLIENT_1=7777
+PASSWORD_CLIENT_1=root
 
 NUM_ROUNDS=2
 NUM_CLIENTS=2
@@ -15,12 +16,13 @@ NUM_LAYER=4
 DATASET=mnist
 MODEL=greedy-cnn
 
-SERVER_APP_DIR="/media/vincent/program/my_oesamples/secure-aggregation-SGX/"
+SERVER_APP_DIR="/home/hh2119/workspace/PPFL/server_side_sgx/"
 SERVER_AVERAGED_DIR="./results/${DATASET}/averaged_layerwise/"
 SERVER_UPDATES_DIR="./results/${DATASET}/client_updates_layerwise/"
 SERVER_TRAINED_DIR="./results/${DATASET}/trained_layerwise/"
 
 CLIENT_MODEL_DIR="/root/models/${DATASET}/"
+CLIENT_BACKUP_DIR="/root/tmp/backup/"
 DM="${DATASET}_${MODEL}"
 
 STARTER="./results/${DATASET}/${DM}.weights"
@@ -33,6 +35,8 @@ cd ${SERVER_APP_DIR}
 
 rm -rf ${SERVER_TRAINED_DIR}
 mkdir ${SERVER_TRAINED_DIR}
+
+ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "[${IP_CLIENT_1}]:${PORT_CLIENT_1}"
 
 for((l=1;l<=${NUM_LAYER};l++))
 do
@@ -63,7 +67,7 @@ do
 		do
 			echo "============= copy weights server -> client ${c} ============="
 			rp=$((r-1))
-			time sshpass -p ${PASSWORD_CLIENT_1} scp "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights" "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}_global.weights"
+			time sshpass -p ${PASSWORD_CLIENT_1} scp -o StrictHostKeyChecking=accept-new -P ${PORT_CLIENT_1} "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights" "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}_global.weights"
 			filesize=$(stat --format=%s "${SERVER_AVERAGED_DIR}${DM}_averaged_r${rp}.weights")
 			echo "tee weights: ${filesize} Bytes"
 			sleep 3s
@@ -72,19 +76,19 @@ do
 			# select net cfg for layer
 			if [ ${l} == ${NUM_LAYER} ]
 			then
-				sshpass -p ${PASSWORD_CLIENT_1} ssh "root@${IP_CLIENT_1}" cp "cfg/${MODEL}-aux.cfg" "cfg/${DM}.cfg"
+				sshpass -p ${PASSWORD_CLIENT_1} ssh -o StrictHostKeyChecking=accept-new -p ${PORT_CLIENT_1} "root@${IP_CLIENT_1}" cp "cfg/${MODEL}-aux.cfg" "cfg/${DM}.cfg"
 			else
-				sshpass -p ${PASSWORD_CLIENT_1} ssh "root@${IP_CLIENT_1}" cp "cfg/${MODEL}-layer${l}.cfg" "cfg/${DM}.cfg"
+				sshpass -p ${PASSWORD_CLIENT_1} ssh -o StrictHostKeyChecking=accept-new -p ${PORT_CLIENT_1} "root@${IP_CLIENT_1}" cp "cfg/${MODEL}-layer${l}.cfg" "cfg/${DM}.cfg"
 			fi
 			# training with TEEs (for ss, only support tee)
-			time sshpass -p ${PASSWORD_CLIENT_1} ssh "root@${IP_CLIENT_1}" darknetp classifier train -pp_start_f ${PP_START} -pp_end ${PP_END} -ss 2 "cfg/${DATASET}.dataset" "cfg/${DM}.cfg" "${CLIENT_MODEL_DIR}${DM}_global.weights"
+			time sshpass -p ${PASSWORD_CLIENT_1} ssh -p ${PORT_CLIENT_1} "root@${IP_CLIENT_1}" darknetp classifier train -pp_start_f ${PP_START} -pp_end ${PP_END} -ss 2 "cfg/${DATASET}.dataset" "cfg/${DM}.cfg" "${CLIENT_MODEL_DIR}${DM}_global.weights"
 			sleep 3s
 
 			echo "============= copy weights client ${c} -> server ============="
 			rm -rf "${SERVER_UPDATES_DIR}${DM}_c${c}.weights"
 			mkdir "${SERVER_UPDATES_DIR}${DM}_c${c}.weights"
 
-			time sshpass -p ${PASSWORD_CLIENT_1} scp "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}.weights_tee" "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_tee"
+			time sshpass -p ${PASSWORD_CLIENT_1} scp -P ${PORT_CLIENT_1} "root@${IP_CLIENT_1}:${CLIENT_MODEL_DIR}${DM}.weights_tee" "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_tee"
 			filesize=$(stat --format=%s "${SERVER_UPDATES_DIR}${DM}_c${c}.weights/_tee")
 			echo "tee weights: ${filesize} Bytes"
 			sleep 3s
